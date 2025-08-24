@@ -5,19 +5,19 @@ import tempfile
 from pathlib import Path
 import shutil
 import glob
-import subprocess # For running ffmpeg
+import subprocess  # For running ffmpeg
 import math
 
 # Keep relevant imports from the original script
-import librosa # For duration check
+import librosa  # For duration check
 import numpy as np
 import torch
 import torchaudio
 import traceback
-from utils.formatter import format_audio_list, list_audios # Assuming these utils exist and work standalone
-from utils.gpt_train import train_gpt # Assuming this util exists and works standalone
+from .utils.formatter import format_audio_list, list_audios
+from .utils.gpt_train import train_gpt
 
-from faster_whisper import WhisperModel # Keep for data processing
+from faster_whisper import WhisperModel  # Keep for data processing
 
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
@@ -43,9 +43,6 @@ def clear_gpu_cache():
         print("Clearing GPU cache...")
         torch.cuda.empty_cache()
         print("GPU cache cleared.")
-
-# Global variable for the loaded model (needed for inference step)
-XTTS_MODEL = None
 
 # --- Modified/New Headless Functions ---
 
@@ -532,7 +529,6 @@ def create_reference_wavs(original_ref_wav_path, output_dir, output_basename):
 
 def load_model_headless(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker):
     """Headless version of load_model."""
-    global XTTS_MODEL
     clear_gpu_cache()
     print(f"\n--- Starting Step 3: Loading Fine-tuned Model ---")
     print(f"Checkpoint: {xtts_checkpoint}")
@@ -540,14 +536,12 @@ def load_model_headless(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker):
     print(f"Vocab: {xtts_vocab}")
     print(f"Speaker: {xtts_speaker}")
 
-
     if not Path(xtts_checkpoint).exists() or not Path(xtts_config).exists() or not Path(xtts_vocab).exists():
-         missing = [p for p in [xtts_checkpoint, xtts_config, xtts_vocab] if not Path(p).exists()]
-         print(f"Error: Model loading failed. Missing essential files: {missing}")
-         return "Model loading failed: Essential files not found."
+        missing = [p for p in [xtts_checkpoint, xtts_config, xtts_vocab] if not Path(p).exists()]
+        print(f"Error: Model loading failed. Missing essential files: {missing}")
+        return None, "Model loading failed: Essential files not found."
     if xtts_speaker and not Path(xtts_speaker).exists():
         print(f"Warning: Speaker file {xtts_speaker} not found. Model might load but speaker info will be missing.")
-        # Allow loading without speaker file if user proceeds. Inference might need speaker_wav.
 
     try:
         print("Initializing XTTS model configuration...")
@@ -555,33 +549,32 @@ def load_model_headless(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker):
         config.load_json(xtts_config)
 
         print("Initializing XTTS model from configuration...")
-        XTTS_MODEL = Xtts.init_from_config(config)
+        model = Xtts.init_from_config(config)
 
         print("Loading checkpoint and speaker data...")
-        XTTS_MODEL.load_checkpoint(
-             config,
-             checkpoint_path=xtts_checkpoint,
-             vocab_path=xtts_vocab,
-             speaker_file_path=xtts_speaker if xtts_speaker and Path(xtts_speaker).exists() else None, # Pass None if missing
-             use_deepspeed=False
-             )
+        model.load_checkpoint(
+            config,
+            checkpoint_path=xtts_checkpoint,
+            vocab_path=xtts_vocab,
+            speaker_file_path=xtts_speaker if xtts_speaker and Path(xtts_speaker).exists() else None,
+            use_deepspeed=False,
+        )
 
         if torch.cuda.is_available():
             print("Moving model to GPU...")
-            XTTS_MODEL.cuda()
+            model.cuda()
         else:
             print("CUDA not available, using CPU.")
 
         print("--- Step 3: Model Loading Completed ---")
-        return "Model Loaded Successfully!"
+        return model, "Model Loaded Successfully!"
     except Exception as e:
         print(f"\n---!!! Model loading failed! !!!---")
         traceback.print_exc()
-        XTTS_MODEL = None # Ensure model is not partially loaded
-        return f"Model loading failed: {e}"
+        return None, f"Model loading failed: {e}"
 
 
-def run_tts_headless(lang, tts_text, speaker_audio_file, output_wav_path, temperature=0.75, length_penalty=1.0, repetition_penalty=5.0, top_k=50, top_p=0.85, sentence_split=True):
+def run_tts_headless(model, lang, tts_text, speaker_audio_file, output_wav_path, temperature=0.75, length_penalty=1.0, repetition_penalty=5.0, top_k=50, top_p=0.85, sentence_split=True):
     """Headless version of run_tts."""
     print(f"\n--- Starting Step 4: Generating Example TTS ---")
     print(f"Language: {lang}")
@@ -590,7 +583,7 @@ def run_tts_headless(lang, tts_text, speaker_audio_file, output_wav_path, temper
     print(f"Output Path: {output_wav_path}")
     print(f"Settings: Temp={temperature}, LenPenalty={length_penalty}, RepPenalty={repetition_penalty}, TopK={top_k}, TopP={top_p}, Split={sentence_split}")
 
-    if XTTS_MODEL is None:
+    if model is None:
         print("Error: Model is not loaded. Cannot run TTS.")
         return "TTS failed: Model not loaded.", None
     if not Path(speaker_audio_file).exists():
@@ -611,25 +604,22 @@ def run_tts_headless(lang, tts_text, speaker_audio_file, output_wav_path, temper
 
         # Ensure conditioning latents are calculated correctly, matching model's expectations
         # Handle potential API changes in XTTS versions
-        if hasattr(XTTS_MODEL, "get_conditioning_latents"):
-            gpt_cond_latent, speaker_embedding = XTTS_MODEL.get_conditioning_latents(
+        if hasattr(model, "get_conditioning_latents"):
+            gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
                 audio_path=speaker_ref_to_use,
-                gpt_cond_len=getattr(XTTS_MODEL.config, 'gpt_cond_len', 30), # Provide default if missing
-                max_ref_length=getattr(XTTS_MODEL.config, 'max_ref_len', 60), # Provide default
-                sound_norm_refs=getattr(XTTS_MODEL.config, 'sound_norm_refs', False) # Provide default
+                gpt_cond_len=getattr(model.config, 'gpt_cond_len', 30),
+                max_ref_length=getattr(model.config, 'max_ref_len', 60),
+                sound_norm_refs=getattr(model.config, 'sound_norm_refs', False)
             )
-        elif hasattr(XTTS_MODEL, "extract_tts_latents"): # Check for alternative method names
-             # This might require different parameters depending on the XTTS version
-             # Example structure, needs verification:
-             latents = XTTS_MODEL.extract_tts_latents(
-                 speaker_wav=speaker_ref_to_use,
-                 language=lang, # Might need language here
-                 # Potentially other args like gpt_cond_len etc.
-             )
-             gpt_cond_latent = latents.get("gpt_cond_latents") # Adjust key based on actual return
-             speaker_embedding = latents.get("speaker_embedding") # Adjust key
-             if gpt_cond_latent is None or speaker_embedding is None:
-                 raise RuntimeError("Failed to extract latents using 'extract_tts_latents'. Check XTTS version compatibility.")
+        elif hasattr(model, "extract_tts_latents"):
+            latents = model.extract_tts_latents(
+                speaker_wav=speaker_ref_to_use,
+                language=lang,
+            )
+            gpt_cond_latent = latents.get("gpt_cond_latents")
+            speaker_embedding = latents.get("speaker_embedding")
+            if gpt_cond_latent is None or speaker_embedding is None:
+                raise RuntimeError("Failed to extract latents using 'extract_tts_latents'. Check XTTS version compatibility.")
         else:
              raise NotImplementedError("Could not find a method to get conditioning latents (get_conditioning_latents or extract_tts_latents) in the loaded XTTS model.")
 
@@ -637,7 +627,7 @@ def run_tts_headless(lang, tts_text, speaker_audio_file, output_wav_path, temper
 
         print("Running TTS inference...")
         # Ensure inference parameters match the model's expected signature
-        out = XTTS_MODEL.inference(
+        out = model.inference(
             text=tts_text,
             language=lang,
             gpt_cond_latent=gpt_cond_latent,
@@ -807,23 +797,24 @@ def main():
         final_speaker_xtts_path = Path(speaker_xtts_path).resolve() if speaker_xtts_path else None
         optimized_model_path = Path(optimized_model_path).resolve()
 
-        status = load_model_headless(
+        model, status = load_model_headless(
             xtts_checkpoint=str(optimized_model_path),
             xtts_config=str(final_config_path),
             xtts_vocab=str(final_vocab_path),
             xtts_speaker=str(final_speaker_xtts_path) if final_speaker_xtts_path else None
         )
-        if "failed" in status.lower() or "error" in status.lower():
+        if model is None:
             print(f"Error loading trained model: {status}")
             sys.exit(1)
 
         # --- Step 4: Generate Example TTS ---
         example_output_wav_path = output_dir / f"{output_name}_generated_example.wav"
         status, generated_wav = run_tts_headless(
+            model=model,
             lang=args.lang,
             tts_text=args.example_text,
-            speaker_audio_file=str(final_reference_wav.resolve()), # Pass absolute path to reference
-            output_wav_path=str(example_output_wav_path.resolve()), # Pass absolute path for output
+            speaker_audio_file=str(final_reference_wav.resolve()),
+            output_wav_path=str(example_output_wav_path.resolve()),
             temperature=args.temperature,
             length_penalty=args.length_penalty,
             repetition_penalty=args.repetition_penalty,
@@ -833,7 +824,6 @@ def main():
         )
         if "failed" in status.lower() or "error" in status.lower():
             print(f"Error generating example TTS: {status}")
-            # Don't necessarily exit, the model might still be fine
 
     # --- End ---
     print(f"\n-------------------------------------------")

@@ -1,9 +1,11 @@
 #!/bin/bash
 
-# Create a Python virtual environment
-python -m venv venv
-# Activate the virtual environment
+if [ ! -d "venv" ]; then
+  echo "Virtual environment not found. Run install.sh first."
+  exit 1
+fi
+
 source venv/bin/activate
 
-python xtts_demo.py
+python -m src.xtts_demo
 

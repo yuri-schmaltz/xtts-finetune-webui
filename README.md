@@ -4,9 +4,6 @@ This webui is a slightly modified copy of the [official webui](https://github.co
 
 If you are looking for an option for normal XTTS use look here [https://github.com/daswer123/xtts-webui](https://github.com/daswer123/xtts-webui)
 
-## TODO
-- [ ] Add the ability to use via console 
-
 ## Key features:
 
 ### Data processing
@@ -55,16 +52,17 @@ If you are looking for an option for normal XTTS use look here [https://github.c
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Spaces-yellow?style=flat&logo=huggingface)](https://huggingface.co/spaces/drewThomasson/xtts-finetune-webui-gpu) [![Kaggle](https://img.shields.io/badge/Kaggle-035a7d?style=flat&logo=kaggle&logoColor=white)](notebook/kaggle-xtts-finetune-webui-gradio-gui.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrewThomasson/ebook2audiobook/blob/v25/Notebooks/finetune/xtts/colab_xtts_finetune_webui.ipynb)
 
 
-## 🐳 Run in Docker 
+## 🐳 Run in Docker
 ```docker
 docker run -it --gpus all --pull always -p 7860:7860 --platform=linux/amd64 athomasson2/fine_tune_xtts:huggingface python app.py
 ```
+For custom containers, use `bash start-container.sh` to set up the required `LD_LIBRARY_PATH` for CUDNN before launching the app.
 ## Run Headless
 
 ```bash
-python headlessXttsTrain.py --input_audio speaker.wav --lang en --epochs 10 # Example with parameters
+python -m src.headlessXttsTrain --input_audio speaker.wav --lang en --epochs 10
 
-python headlessXttsTrain.py --help # See parameters
+python -m src.headlessXttsTrain --help
 ```
 
 ## Install
@@ -72,8 +70,7 @@ python headlessXttsTrain.py --help # See parameters
 1. Make sure you have `Cuda` installed
 2. `git clone https://github.com/daswer123/xtts-finetune-webui`
 3. `cd xtts-finetune-webui`
-4. `pip install torch==2.1.1+cu118 torchaudio==2.1.1+cu118 --index-url https://download.pytorch.org/whl/cu118`
-5. `pip install -r requirements.txt`
+4. `bash install.sh`
 
 ### If you're using Windows
 
@@ -84,17 +81,16 @@ python headlessXttsTrain.py --help # See parameters
 ### On Linux
 
 1. Run `bash install.sh`
-2. To start the server start `start.sh`
+2. To start the server run `bash start.sh`
 3. Go to the local address `127.0.0.1:5003`
 
 ### On Apple Silicon Mac (python 3.10 env)
 1. ``` pip install --no-deps -r apple_silicon_requirements.txt ```
-2. To start the server `python xtts_demo.py`
+2. To start the server `python -m src.xtts_demo`
 3. Go to the local address `127.0.0.1:5003`
 
 ### On Manjaro x86 (python 3.11.11 env)
 1. ``` pip install --no-deps -r ManjaroX86Python3.11.11_requirements.txt ```
-2. To start the server `python xtts_demo.py`
+2. To start the server `python -m src.xtts_demo`
 3. Go to the local address `127.0.0.1:5003`
 
-~                                            
