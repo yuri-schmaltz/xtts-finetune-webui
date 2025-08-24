@@ -1,5 +1,10 @@
 @echo off
 
-call venv/scripts/activate
+if not exist venv (
+  echo Virtual environment not found. Run install.bat first.
+  exit /b 1
+)
 
-python xtts_demo.py
+call venv\scripts\activate
+
+python -m src.xtts_demo

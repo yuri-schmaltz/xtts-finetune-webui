@@ -1,23 +1,34 @@
 import os
-import gc
-import torchaudio
-import pandas
-from faster_whisper import WhisperModel
+
+try:
+    import torchaudio
+except Exception:  # pragma: no cover - torchaudio may be unavailable
+    torchaudio = None
+
+try:
+    from faster_whisper import WhisperModel
+except Exception:  # pragma: no cover
+    WhisperModel = None
+
 from glob import glob
 
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
 
-from TTS.tts.layers.xtts.tokenizer import multilingual_cleaners
-# Add support for JA train
-# from utils.tokenizer import multilingual_cleaners
+try:
+    from TTS.tts.layers.xtts.tokenizer import multilingual_cleaners
+except Exception:  # pragma: no cover
+    def multilingual_cleaners(text, lang):
+        return text
 
-import torch
-import torchaudio
-# torch.set_num_threads(1)
-
-
-torch.set_num_threads(16)
-import os
+try:
+    import torch
+    from os import cpu_count
+    torch.set_num_threads(cpu_count() or 1)
+except Exception:  # pragma: no cover
+    torch = None
 
 audio_types = (".wav", ".mp3", ".flac")
 
@@ -52,6 +63,8 @@ def list_files(basePath, validExts=None, contains=None):
                 yield audioPath
 
 def format_audio_list(audio_files, asr_model, target_language="en", out_path=None, buffer=0.2, eval_percentage=0.15, speaker_name="coqui", gradio_progress=None):
+    import pandas
+
     audio_total_size = 0
     os.makedirs(out_path, exist_ok=True)
 
@@ -81,10 +94,12 @@ def format_audio_list(audio_files, asr_model, target_language="en", out_path=Non
         existing_metadata['eval'] = pandas.read_csv(eval_metadata_path, sep="|")
         print("Existing evaluation metadata found and loaded.")
 
-    if gradio_progress is not None:
+    if gradio_progress is not None and tqdm is not None:
         tqdm_object = gradio_progress.tqdm(audio_files, desc="Formatting...")
-    else:
+    elif tqdm is not None:
         tqdm_object = tqdm(audio_files)
+    else:
+        tqdm_object = audio_files
 
     for audio_path in tqdm_object:
         audio_file_name_without_ext, _= os.path.splitext(os.path.basename(audio_path))

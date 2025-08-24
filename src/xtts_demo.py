@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from functools import lru_cache
 
 import shutil
 import glob
@@ -14,8 +15,8 @@ import numpy as np
 import torch
 import torchaudio
 import traceback
-from utils.formatter import format_audio_list,find_latest_best_model, list_audios
-from utils.gpt_train import train_gpt
+from .utils.formatter import format_audio_list, find_latest_best_model, list_audios
+from .utils.gpt_train import train_gpt
 
 from faster_whisper import WhisperModel
 
@@ -51,8 +52,6 @@ def clear_gpu_cache():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-XTTS_MODEL = None
-
 def create_zip(folder_path, zip_name):
     zip_path = os.path.join(tempfile.gettempdir(), f"{zip_name}.zip")
     shutil.make_archive(zip_path.replace('.zip', ''), 'zip', folder_path)
@@ -70,43 +69,63 @@ def get_dataset_zip(out_path):
         return create_zip(dataset_folder, "dataset")
     return None
 
-def load_model(xtts_checkpoint, xtts_config, xtts_vocab,xtts_speaker):
-    global XTTS_MODEL
+@lru_cache(maxsize=1)
+def get_xtts_model(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker):
     clear_gpu_cache()
     if not xtts_checkpoint or not xtts_config or not xtts_vocab:
-        return "You need to run the previous steps or manually set the `XTTS checkpoint path`, `XTTS config path`, and `XTTS vocab path` fields !!"
+        raise ValueError("Missing model paths")
     config = XttsConfig()
     config.load_json(xtts_config)
-    XTTS_MODEL = Xtts.init_from_config(config)
+    model = Xtts.init_from_config(config)
     print("Loading XTTS model! ")
-    XTTS_MODEL.load_checkpoint(config, checkpoint_path=xtts_checkpoint, vocab_path=xtts_vocab,speaker_file_path=xtts_speaker, use_deepspeed=False)
+    model.load_checkpoint(
+        config,
+        checkpoint_path=xtts_checkpoint,
+        vocab_path=xtts_vocab,
+        speaker_file_path=xtts_speaker,
+        use_deepspeed=False,
+    )
     if torch.cuda.is_available():
-        XTTS_MODEL.cuda()
-
+        model.cuda()
     print("Model Loaded!")
-    return "Model Loaded!"
+    return model
 
-def run_tts(lang, tts_text, speaker_audio_file, temperature, length_penalty,repetition_penalty,top_k,top_p,sentence_split,use_config):
-    if XTTS_MODEL is None or not speaker_audio_file:
+
+def load_model(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker):
+    try:
+        model = get_xtts_model(xtts_checkpoint, xtts_config, xtts_vocab, xtts_speaker)
+        return "Model Loaded!", model
+    except Exception as e:
+        traceback.print_exc()
+        get_xtts_model.cache_clear()
+        return f"Model loading failed: {e}", None
+
+def run_tts(lang, tts_text, speaker_audio_file, temperature, length_penalty, repetition_penalty, top_k, top_p, sentence_split, use_config, model):
+    if model is None or not speaker_audio_file:
         return "You need to run the previous step to load the model !!", None, None
 
-    gpt_cond_latent, speaker_embedding = XTTS_MODEL.get_conditioning_latents(audio_path=speaker_audio_file, gpt_cond_len=XTTS_MODEL.config.gpt_cond_len, max_ref_length=XTTS_MODEL.config.max_ref_len, sound_norm_refs=XTTS_MODEL.config.sound_norm_refs)
-    
+    gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+        audio_path=speaker_audio_file,
+        gpt_cond_len=model.config.gpt_cond_len,
+        max_ref_length=model.config.max_ref_len,
+        sound_norm_refs=model.config.sound_norm_refs,
+    )
+
     if use_config:
-        out = XTTS_MODEL.inference(
+        out = model.inference(
             text=tts_text,
             language=lang,
             gpt_cond_latent=gpt_cond_latent,
             speaker_embedding=speaker_embedding,
-            temperature=XTTS_MODEL.config.temperature, # Add custom parameters here
-            length_penalty=XTTS_MODEL.config.length_penalty,
-            repetition_penalty=XTTS_MODEL.config.repetition_penalty,
-            top_k=XTTS_MODEL.config.top_k,
-            top_p=XTTS_MODEL.config.top_p,
+            temperature=model.config.temperature,
+            length_penalty=model.config.length_penalty,
+            repetition_penalty=model.config.repetition_penalty,
+            top_k=model.config.top_k,
+            top_p=model.config.top_p,
             enable_text_splitting = True
         )
     else:
-        out = XTTS_MODEL.inference(
+        out = model.inference(
             text=tts_text,
             language=lang,
             gpt_cond_latent=gpt_cond_latent,
@@ -222,6 +241,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with gr.Blocks(title=os.environ.get("APP_NAME", "Gradio")) as demo:
+        model_state = gr.State()
         with gr.Tab("1 - Data processing"):
             out_path = gr.Textbox(
                 label="Output path (where data and checkpoints will be saved):",
@@ -715,7 +735,7 @@ if __name__ == "__main__":
                     xtts_vocab,
                     xtts_speaker
                 ],
-                outputs=[progress_load],
+                outputs=[progress_load, model_state],
             )
 
             tts_btn.click(
@@ -730,7 +750,8 @@ if __name__ == "__main__":
                     top_k,
                     top_p,
                     sentence_split,
-                    use_config
+                    use_config,
+                    model_state
                 ],
                 outputs=[progress_gen, tts_output_audio,reference_audio],
             )
