@@ -32,11 +32,16 @@ except Exception:  # pragma: no cover
 
 audio_types = (".wav", ".mp3", ".flac")
 
+
 def find_latest_best_model(folder_path):
-        search_path = os.path.join(folder_path, '**', 'best_model.pth')
-        files = glob(search_path, recursive=True)
-        latest_file = max(files, key=os.path.getctime, default=None)
-        return latest_file
+    """Return the most recently created ``best_model.pth`` file under ``folder_path``.
+
+    If no such file exists the function returns ``None``.
+    """
+    search_path = os.path.join(folder_path, "**", "best_model.pth")
+    files = glob(search_path, recursive=True)
+    latest_file = max(files, key=os.path.getctime, default=None)
+    return latest_file
 
 
 def list_audios(basePath, contains=None):
@@ -61,6 +66,49 @@ def list_files(basePath, validExts=None, contains=None):
                 # construct the path to the audio and yield it
                 audioPath = os.path.join(rootDir, filename)
                 yield audioPath
+
+
+def merge_and_split_metadata(train_metadata_path, eval_metadata_path,
+                             existing_train_df, existing_eval_df,
+                             eval_percentage):
+    """Merge new metadata with existing datasets and create a fresh
+    train/eval split.
+
+    Existing evaluation entries are preserved and removed from the
+    training set to avoid overlap.
+    """
+    import pandas
+
+    new_data_df = pandas.read_csv(train_metadata_path, sep="|")
+    combined_train_df = (
+        pandas.concat([existing_train_df, new_data_df], ignore_index=True)
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    combined_train_df_shuffled = combined_train_df.sample(
+        frac=1, random_state=42
+    )
+    num_val_samples = int(len(combined_train_df_shuffled) * eval_percentage)
+
+    new_eval_split = combined_train_df_shuffled[:num_val_samples]
+    final_training_set = combined_train_df_shuffled[num_val_samples:]
+
+    final_eval_set = (
+        pandas.concat([existing_eval_df, new_eval_split], ignore_index=True)
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    final_training_set = final_training_set[
+        ~final_training_set["audio_file"].isin(final_eval_set["audio_file"])
+    ]
+
+    final_training_set.sort_values("audio_file").to_csv(
+        train_metadata_path, sep="|", index=False
+    )
+    final_eval_set.sort_values("audio_file").to_csv(
+        eval_metadata_path, sep="|", index=False
+    )
 
 def format_audio_list(audio_files, asr_model, target_language="en", out_path=None, buffer=0.2, eval_percentage=0.15, speaker_name="coqui", gradio_progress=None):
     import pandas
@@ -190,24 +238,22 @@ def format_audio_list(audio_files, asr_model, target_language="en", out_path=Non
                 metadata = {"audio_file": [], "text": [], "speaker_name": []}
 
     if os.path.exists(train_metadata_path) and os.path.exists(eval_metadata_path):
-        existing_train_df = existing_metadata['train']
-        existing_eval_df = existing_metadata['eval']
+        existing_train_df = existing_metadata["train"]
+        existing_eval_df = existing_metadata["eval"]
     else:
-        existing_train_df = pandas.DataFrame(columns=["audio_file", "text", "speaker_name"])
-        existing_eval_df = pandas.DataFrame(columns=["audio_file", "text", "speaker_name"])
+        existing_train_df = pandas.DataFrame(
+            columns=["audio_file", "text", "speaker_name"]
+        )
+        existing_eval_df = pandas.DataFrame(
+            columns=["audio_file", "text", "speaker_name"]
+        )
 
-    new_data_df = pandas.read_csv(train_metadata_path, sep="|")
-
-    combined_train_df = pandas.concat([existing_train_df, new_data_df], ignore_index=True).drop_duplicates().reset_index(drop=True)
-    combined_eval_df = pandas.concat([existing_eval_df, new_data_df], ignore_index=True).drop_duplicates().reset_index(drop=True)
-
-    combined_train_df_shuffled = combined_train_df.sample(frac=1)
-    num_val_samples = int(len(combined_train_df_shuffled)* eval_percentage)
-
-    final_eval_set = combined_train_df_shuffled[:num_val_samples]
-    final_training_set = combined_train_df_shuffled[num_val_samples:]
-
-    final_training_set.sort_values('audio_file').to_csv(train_metadata_path, sep='|', index=False)
-    final_eval_set.sort_values('audio_file').to_csv(eval_metadata_path, sep='|', index=False)
+    merge_and_split_metadata(
+        train_metadata_path,
+        eval_metadata_path,
+        existing_train_df,
+        existing_eval_df,
+        eval_percentage,
+    )
 
     return train_metadata_path, eval_metadata_path, audio_total_size
